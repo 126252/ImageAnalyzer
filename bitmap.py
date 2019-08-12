@@ -89,8 +89,6 @@ class Bitmap():
         self.row_size = 0
         self.padding = 0
 
-        self.method = ""
-
     def __del__(self):
         self.file.close()
 
@@ -546,30 +544,27 @@ class Bitmap():
             saves the file, if what is specifed it saves that part only
         '''
 
-        if self.method == "w" or self.method == "rw":
-            if what == None:
-                self.header("write")
-                self.information_header("write")
-                self.pixel_array("write")
+        if what == None:
+            self.header("write")
+            self.information_header("write")
+            self.pixel_array("write")
 
-            elif what == "header":
-                self.header("write")
+        elif what == "header":
+            self.header("write")
 
-            elif what == "info":
-                self.information_header("write")
+        elif what == "info":
+            self.information_header("write")
 
-            elif what == "pixels":
-                self.pixel_array("write")
+        elif what == "pixels":
+            self.pixel_array("write")
 
-            else:
-                raise Exception("invlaid what. (header, info, pixels)")
         else:
-            raise Exception("invalid method, this file can not be saved.")
+                raise Exception("invlaid what. (header, info, pixels)")
+
 
 
 if __name__ == "__main__":
     img = Bitmap("./nature32noicc.bmp")
-    img.method = "rw"
     img.read()
     print(img)
     print(img.array[0][0])
