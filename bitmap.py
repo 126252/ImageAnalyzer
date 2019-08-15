@@ -31,10 +31,7 @@ class Bitmap():
         self.encoding = "utf-8"
 
         self.file_dir = file_dir
-        try:
-            self.file = open(self.file_dir, "r+b")
-        except Exception as e:
-            logger.error(e)
+        self.file = ''
 
         self.headertypes = {"BITMAPCOREHEADER":12, "OS22XBITMAPHEADER":64,
                            "OS22XBITMAPHEADER":16, "BITMAPINFOHEADER":40,
@@ -135,52 +132,34 @@ class Bitmap():
         +"row size:             " + str(self.row_size) + "\n"
         +"padding:              " + str(self.padding) + "\n")
 
-    def open_file(self, path,  method):
-        '''
-            opens the bitmap file (read or/and write)
-
-            path = dir and name of file
-            method <-- see open
-            
-        '''
-        
-        self.file.close()
-        
-        self.file_dir = path
-        try:
-            self.file = open(self.file_dir, method)
-        except Exception as e:
-            logger.error(e)
 
     def read(self, what=None):
         '''
             reads the file, if what is specifed it reads that part only
         '''
         logger.info(f"reading bitmap file, name: {self.file_dir}")
-     
-        if what == None:
-            self.file.seek(0)
-            self.header('read')
-            self.information_header('read')
-            self.pixel_array('read')
 
-        elif what == "header":
-            self.file.seek(0)
-            self.header('read')
-
-        elif what == "info":
-            self.file.seek(14)
-            self.information_header('read')
-
-        elif what == "pixels":
-            if self.info_header > 0:
-                self.file.seek(14 + self.info_header)
+        with open(self.file_dir, 'rb') as self.file:
+            if what == None:
+                self.header('read')
+                self.information_header('read')
                 self.pixel_array('read')
 
+            elif what == "header":
+                self.header('read')
+
+            elif what == "info":
+                self.information_header('read')
+
+            elif what == "pixels":
+                if self.info_header > 0:
+                    self.file.seek(14 + self.info_header)
+                    self.pixel_array('read')
+
+                else:
+                    raise Exception("needs information header to read pixel array")
             else:
-                raise Exception("needs information header to read pixel array")
-        else:
-            raise Exception("invlaid what. (header, info, pixels)")
+                raise Exception("invlaid what. (header, info, pixels)")
      
         logger.info(f"finished reading file")
 
@@ -196,6 +175,7 @@ class Bitmap():
             -reserverd 2
             -pixel array offset
         '''
+        self.file.seek(0)
         if rw == "read":
             logger.debug("reading header")
             # all bitmaps have this, first part of file
@@ -218,6 +198,10 @@ class Bitmap():
             logger.error("rw <-- not 'read' or 'write' ")
             raise Exception("rw <-- not 'read' or 'write' ")
 
+
+    def color_tabel(self, rw):
+        pass
+
     def information_header(self, rw):
         '''
             reads/writes the bitmap information header, and figure out
@@ -229,6 +213,8 @@ class Bitmap():
         '''
         logger.debug("figure out which infoheader it is")
         # bitmap information header
+        self.file.seek(14)
+        
         if rw == "read":
             self.info_header = int.from_bytes(self.file.read(4), "little")
         elif rw == "write":
@@ -457,35 +443,28 @@ class Bitmap():
         '''
         bytesPerPixel = self.bpp // 8
 
+        self.file.seek(self.pixel_array_offset)
+
         if rw == "read":
             logger.debug("reading pixel Array")
-            
-            self.row_size = int(math.ceil(self.bpp * self.width / 32) * 4)
-            self.padding = int(self.row_size - (bytesPerPixel * self.width))
 
-            self.red_offset = math.ceil(math.log((pow(2, math.ceil(math.log(
-                self.red_channel,2))) - self.red_channel), 2)) if self.red_channel > 0 else 0
-            
-            self.green_offset = math.ceil(math.log((pow(2, math.ceil(math.log(
-                self.green_channel,2))) - self.green_channel), 2))if self.green_channel > 0 else 0
-            
-            self.blue_offset = math.ceil(math.log((pow(2, math.ceil(math.log(
-                self.blue_channel,2))) - self.blue_channel), 2))if self.blue_channel > 0 else 0
-            
-            self.alpha_offset = math.ceil(math.log((pow(2, math.ceil(math.log(
-                self.alpha_channel,2))) - self.alpha_channel), 2))if self.alpha_channel > 0 else 0
-            
-            self.x_offset = math.ceil(math.log((pow(2, math.ceil(math.log(
-                self.x,2))) - self.x), 2))if self.x > 0 else 0
-            
-            self.array = np.empty(
-                (self.height,(self.row_size - self.padding)//bytesPerPixel, 5),
-                dtype=np.int32)
-            
             self.x = ~ (self.red_channel |
                    self.green_channel |
                    self.blue_channel |
                    self.alpha_channel) # not used bits
+            
+            self.row_size = int(math.ceil(self.bpp * self.width / 32) * 4)
+            self.padding = int(self.row_size - (bytesPerPixel * self.width))
+
+            self.add_channel("red")
+            self.add_channel("green")
+            self.add_channel("blue")
+            self.add_channel("alpha")
+            self.add_channel("x")
+            
+            self.array = np.empty(
+                (self.height,(self.row_size - self.padding)//bytesPerPixel, 5),
+                dtype=np.int32)
 
             # reading the value
 
@@ -495,13 +474,13 @@ class Bitmap():
             try:
                 for row in range(self.height):
                     for pixel in range(self.width):
-                        if (row) * self.row_size - pixel > self.padding:
-                            pixel_bytes = int.from_bytes(self.file.read(bytesPerPixel), "little")
-                            for channel, offset, i in zip(channels, offsets, range(4)):
-                                self.array[row][pixel][i] = (pixel_bytes & channel) >> offset
-                        else:
-                            # skiping padding
-                            self.file.seek(1, 1)
+                        pixel_bytes = int.from_bytes(self.file.read(bytesPerPixel), "little")
+                        for channel, offset, i in zip(channels, offsets, range(4)):
+                            self.array[row][pixel][i] = (pixel_bytes & channel) >> offset
+
+                    if self.padding > 0:
+                        self.file.seek(self.padding, 1)
+                  
             except Exception as e:
                 logger.debug(f"row {row}")
                 logger.debug(f"pixel {pixel}")
@@ -519,18 +498,19 @@ class Bitmap():
 
             channels = [self.red_channel,self.green_channel,self.blue_channel,self.alpha_channel,self.x]
             offsets =[self.red_offset,self.green_offset,self.blue_offset,self.alpha_offset,self.x_offset]
-
+            array = 0
             for row in range(self.height):
                 for pixel in range(self.width):
-                    if (row) * self.row_size - pixel > self.padding:
-                        pixel_bytes = 0
-                        for channel, offset, i in zip(channels, offsets, range(5)):
-                            pixel_bytes += self.array[row][pixel][i] << offset
+                    pixel_bytes = 0
+                    for channel, offset, i in zip(channels, offsets, range(5)):
+                        if offset >= 0:
+                            pixel_bytes += self.array[row,pixel,i].item() << offset
 
-                        self.file.write(pixel_bytes.astype(np.int32))
-                    else:
-                        # skiping padding
-                        self.file.write(b"0")
+                    self.file.write(pixel_bytes.to_bytes(bytesPerPixel, "little"))
+                        
+                if self.padding > 0:
+                    # skiping padding
+                    self.file.write(bytes(self.padding))
             
 
         else:
@@ -544,39 +524,105 @@ class Bitmap():
             saves the file, if what is specifed it saves that part only
         '''
 
-        if what == None:
-            self.header("write")
-            self.information_header("write")
-            self.pixel_array("write")
+        logger.info(f"writing file to {self.file_dir}")
 
-        elif what == "header":
-            self.header("write")
 
-        elif what == "info":
-            self.information_header("write")
+        with open(self.file_dir, "wb") as self.file:
+            if what == None:
+                self.header("write")
+                self.information_header("write")
+                self.pixel_array("write")
 
-        elif what == "pixels":
-            self.pixel_array("write")
+            elif what == "header":
+                self.header("write")
+
+            elif what == "info":
+                self.information_header("write")
+
+            elif what == "pixels":
+                self.pixel_array("write")
+
+            else:
+                    raise Exception("invlaid what. (header, info, pixels)")
+
+        logger.info("finished writing")
+
+    def alias_color(self, rgbax, rgbax2):
+        '''
+            all values in array that equal rgbax gets the value rgbax2
+
+            rgbax <--- array[r,g,b,a,x]
+            rgbax2 <--- array[r,g,b,a,x]
+        '''
+        logger.info(f"converting {rgbax} into {rgbax2}")
+
+        for row in range(self.height):
+            for pixel in range(self.width):
+                if np.array_equal(rgbax, self.array[row,pixel]):
+                    self.array[row,pixel] = rgbax2
+
+    def remove_channel(self, channel):
+        '''
+            makes the offset - so that channels values is not writen to file and isteads writes 0
+
+            channel <--- "red", "green", "blue", "alpha" "x"
+        '''
+
+        if channel == "red":
+            self.red_offset = -1
+        elif channel == "green":
+            self.green_offset = -1
+        elif channel == "blue":
+            self.blue_offset = -1
+        elif channel == "alpha":
+            self.alpha_offset = -1
+        elif channel == "x":
+            self.x_offset = -1
 
         else:
-                raise Exception("invlaid what. (header, info, pixels)")
+            raise Exception("")
 
+    def add_channel(self,channel):
+        '''
+            cals offset for channel
 
+            channel <--- "red", "green", "blue", "alpha" "x"
+        '''
+
+        if channel == "red":
+            self.red_offset = math.ceil(math.log((pow(2, math.ceil(math.log(
+                self.red_channel,2))) - self.red_channel), 2)) if self.red_channel > 0 else 0
+        elif channel == "green":
+            self.green_offset = math.ceil(math.log((pow(2, math.ceil(math.log(
+                self.green_channel,2))) - self.green_channel), 2))if self.green_channel > 0 else 0
+        elif channel == "blue":
+            self.blue_offset = math.ceil(math.log((pow(2, math.ceil(math.log(
+                self.blue_channel,2))) - self.blue_channel), 2))if self.blue_channel > 0 else 0
+        elif channel == "alpha":
+            self.alpha_offset = math.ceil(math.log((pow(2, math.ceil(math.log(
+                self.alpha_channel,2))) - self.alpha_channel), 2))if self.alpha_channel > 0 else 0
+        elif channel == "x":
+            self.x_offset = math.ceil(math.log((pow(2, math.ceil(math.log(
+                self.x,2))) - self.x), 2))if self.x > 0 else 0
+        else:
+            raise Exception("")
 
 if __name__ == "__main__":
-    img = Bitmap("./nature32noicc.bmp")
+    img = Bitmap("./nature16.bmp")
     img.read()
-    print(img)
-    print(img.array[0][0])
+    #img.alias_color([0,0,0,0,0],[255,0,255,0,0])
 
-    img.open_file("./test.bmp", "w+b")
+    #img.remove_channel("green")
+    #img.remove_channel("blue")
+
+    img.file_dir = "./test.bmp"
     img.write()
     
-    img2 = Bitmap("./test.bmp")
-    img2.read()
-
-    print(img2)
-    print(img2.array[0][0])
+##    img2 = Bitmap("./test.bmp")
+##    img2.read()
+##
+##    print(img2)
+##    print(img2.array[0][0])
     
 
     
